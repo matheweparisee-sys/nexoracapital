@@ -1,0 +1,9 @@
+{
+  "projectId": "72146811",
+  "functions": {
+    "crypto-prices": {
+      "hasChanged": false,
+      "hash": "fd7977905fabb58cc94fdb0b94c949072eb3329ffe8f6e2ad246453caf7e8b5c"
+    }
+  }
+}

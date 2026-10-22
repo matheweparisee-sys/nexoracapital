@@ -11,16 +11,36 @@ import { supabase } from './supabase.js';
 import './styles.css';
 
 // ─── Static reference data (illustrative marketing assets) ───────────────────
-// These remain hard-coded on the public landing page as illustrative examples.
-const assets = [
-  { name: 'Bitcoin',  symbol: 'BTC', value: '$12,340.25', amount: '0.18 BTC',  change: '+8.24%',  tone: 'orange', description: 'The original decentralized cryptocurrency' },
-  { name: 'Ethereum', symbol: 'ETH', value: '$7,404.15',  amount: '2.84 ETH',  change: '+5.18%',  tone: 'blue',   description: 'A blockchain supporting smart contracts' },
-  { name: 'Solana',   symbol: 'SOL', value: '$4,936.10',  amount: '36.20 SOL', change: '+11.02%', tone: 'mint',   description: 'A high-speed chain designed for fast transactions' },
+// Coin metadata used across the app. Market data (price, change) is fetched live.
+const COINS = [
+  { id: 'bitcoin',       symbol: 'BTC',  name: 'Bitcoin',     tone: 'orange', color: '#f7931a', description: 'The original decentralized cryptocurrency' },
+  { id: 'ethereum',      symbol: 'ETH',  name: 'Ethereum',    tone: 'blue',   color: '#627eea', description: 'A blockchain supporting smart contracts' },
+  { id: 'solana',        symbol: 'SOL',  name: 'Solana',      tone: 'mint',   color: '#00a878', description: 'A high-speed chain designed for fast transactions' },
+  { id: 'ripple',        symbol: 'XRP',  name: 'XRP',         tone: 'blue',   color: '#23292f', description: 'Cross-border payment settlement network' },
+  { id: 'binancecoin',   symbol: 'BNB',  name: 'BNB',         tone: 'orange', color: '#f3ba2f', description: 'Native token of the BNB Chain ecosystem' },
+  { id: 'dogecoin',      symbol: 'DOGE', name: 'Dogecoin',    tone: 'orange', color: '#c2a633', description: 'A lighthearted, community-driven cryptocurrency' },
+  { id: 'cardano',       symbol: 'ADA',  name: 'Cardano',     tone: 'blue',   color: '#0033ad', description: 'A proof-of-stake blockchain research platform' },
+  { id: 'avalanche-2',   symbol: 'AVAX', name: 'Avalanche',   tone: 'orange', color: '#e84142', description: 'A fast, low-cost smart contract platform' },
+  { id: 'chainlink',     symbol: 'LINK', name: 'Chainlink',   tone: 'blue',   color: '#2a5ada', description: 'Decentralized oracle network for smart contracts' },
+  { id: 'polkadot',      symbol: 'DOT',  name: 'Polkadot',    tone: 'blue',   color: '#e6007a', description: 'A multi-chain framework for interoperable blockchains' },
+  { id: 'litecoin',      symbol: 'LTC',  name: 'Litecoin',    tone: 'blue',   color: '#345d9d', description: 'A peer-to-peer cryptocurrency with fast confirmation' },
+  { id: 'the-open-network', symbol: 'TON', name: 'Toncoin',   tone: 'blue',   color: '#0098ea', description: 'The native token of The Open Network' },
 ];
+const COIN_BY_ID = {};
+COINS.forEach(c => { COIN_BY_ID[c.id] = c; });
+const COIN_BY_SYMBOL = {};
+COINS.forEach(c => { COIN_BY_SYMBOL[c.symbol] = c; });
+
+// Legacy static assets kept for backwards compatibility (non-live contexts).
+const assets = COINS.slice(0, 3).map(c => ({
+  name: c.name, symbol: c.symbol, value: '—', amount: '', change: '—', tone: c.tone, description: c.description,
+}));
+
 const navItems = [
   { label: 'Home',        page: 'home' },
   { label: 'Investments', page: 'investments' },
   { label: 'Portfolio',   page: 'portfolio' },
+  { label: 'Assets',      page: 'assets' },
 ];
 
 // ─── Formatting helpers ──────────────────────────────────────────────────────
@@ -56,8 +76,176 @@ function fmtPct(value) {
 const riskTone = { conservative: 'mint', moderate: 'blue', aggressive: 'orange' };
 
 // Map a holdings/investments asset symbol to the marketing tone/color.
-const symbolTone = { BTC: 'orange', ETH: 'blue', SOL: 'mint' };
+const symbolTone = {};
+COINS.forEach(c => { symbolTone[c.symbol] = c.tone; });
 const symbolIcon = { BTC: Bitcoin, ETH: CircleDollarSign, SOL: CircleDollarSign };
+
+// ─── Live crypto price hook ──────────────────────────────────────────────────
+// Fetches live USD prices from the crypto-prices edge function (CoinGecko proxy).
+// Polls every 20 seconds. Handles rate-limiting and stale data gracefully.
+const CRYPTO_API = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/crypto-prices`;
+const POLL_INTERVAL = 20000;
+
+function useCryptoPrices(enabled = true) {
+  const [prices, setPrices] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const [stale, setStale] = useState(false);
+  const [live, setLive] = useState(false);
+  const timerRef = useRef(null);
+
+  const fetchPrices = useCallback(async () => {
+    try {
+      const resp = await fetch(CRYPTO_API, { headers: { Accept: 'application/json' } });
+      if (resp.status === 503) {
+        setStale(true);
+        if (loading) setLoading(false);
+        return;
+      }
+      if (!resp.ok) throw new Error('fetch_failed');
+      const data = await resp.json();
+      if (data.error) throw new Error(data.error);
+      const map = {};
+      (data.prices || []).forEach(p => {
+        map[p.symbol] = p;
+      });
+      setPrices(prev => {
+        const next = {};
+        Object.keys(map).forEach(sym => {
+          const old = prev[sym];
+          const np = map[sym];
+          if (old && old.price != null && np.price != null) {
+            next[sym] = { ...np, prevPrice: old.price, direction: np.price > old.price ? 'up' : np.price < old.price ? 'down' : old.direction || '' };
+          } else {
+            next[sym] = { ...np, prevPrice: np.price, direction: '' };
+          }
+        });
+        return next;
+      });
+      setLastUpdated(Date.now());
+      setLive(true);
+      setStale(false);
+      setError('');
+    } catch {
+      setStale(true);
+      setLive(false);
+      if (loading) setError('Live prices are temporarily unavailable.');
+    } finally {
+      setLoading(false);
+    }
+  }, [loading]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    fetchPrices();
+    timerRef.current = setInterval(fetchPrices, POLL_INTERVAL);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [enabled, fetchPrices]);
+
+  return { prices, loading, error, lastUpdated, stale, live, reload: fetchPrices };
+}
+
+// Animated number that counts up/down to a target value.
+function AnimatedPrice({ value, format }) {
+  const [display, setDisplay] = useState(value);
+  const [flash, setFlash] = useState('');
+  const prevRef = useRef(value);
+
+  useEffect(() => {
+    const prev = prevRef.current;
+    if (value == null || prev == null) { setDisplay(value); prevRef.current = value; return; }
+    if (value === prev) return;
+
+    const diff = value - prev;
+    const duration = 600;
+    const start = performance.now();
+    const from = prev;
+    const to = value;
+
+    setFlash(diff > 0 ? 'flash-up' : 'flash-down');
+    const flashTimer = setTimeout(() => setFlash(''), 1000);
+
+    let rafId;
+    function tick(now) {
+      const elapsed = now - start;
+      const t = Math.min(elapsed / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplay(from + diff * eased);
+      if (t < 1) { rafId = requestAnimationFrame(tick); }
+      else { setDisplay(to); prevRef.current = to; }
+    }
+    rafId = requestAnimationFrame(tick);
+
+    return () => { cancelAnimationFrame(rafId); clearTimeout(flashTimer); };
+  }, [value]);
+
+  if (value == null) return <span className="price-placeholder">—</span>;
+  return <span className={flash}>{format(display)}</span>;
+}
+
+// Animated percentage change with color and arrow.
+function AnimatedChange({ value }) {
+  const [display, setDisplay] = useState(value);
+  const prevRef = useRef(value);
+
+  useEffect(() => {
+    if (value == null || prevRef.current == null) { setDisplay(value); prevRef.current = value; return; }
+    if (value === prevRef.current) return;
+    const diff = value - prevRef.current;
+    const duration = 500;
+    const start = performance.now();
+    const from = prevRef.current;
+    const to = value;
+    let rafId;
+    function tick(now) {
+      const t = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplay(from + diff * eased);
+      if (t < 1) rafId = requestAnimationFrame(tick);
+      else { setDisplay(to); prevRef.current = to; }
+    }
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [value]);
+
+  if (value == null) return <span className="muted">—</span>;
+  const isUp = display >= 0;
+  return (
+    <span className={`change-badge ${isUp ? 'up' : 'down'}`}>
+      {isUp ? '▲' : '▼'} {Math.abs(display).toFixed(2)}%
+    </span>
+  );
+}
+
+// Live status indicator dot.
+function LiveDot({ live, stale }) {
+  return (
+    <span className={`live-dot ${stale ? 'stale' : live ? 'live' : 'idle'}`}>
+      <i></i>{stale ? 'Stale' : live ? 'Live' : 'Connecting…'}
+    </span>
+  );
+}
+
+// Format a crypto price with appropriate decimals.
+function fmtCryptoPrice(price) {
+  if (price == null) return '—';
+  const n = Number(price);
+  if (!isFinite(n)) return '—';
+  if (n >= 1000) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  if (n >= 1) return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return n.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 6 });
+}
+
+// Coin logo badge with first-letter fallback and brand color.
+function CoinLogo({ coin, size = 52 }) {
+  const style = { width: size, height: size, background: coin.color, fontSize: size > 40 ? '18px' : '14px' };
+  return (
+    <div className="coin-logo" style={style}>
+      {coin.symbol.charAt(0)}
+    </div>
+  );
+}
 
 // ─── Portfolio data hook ─────────────────────────────────────────────────────
 // Loads the signed-in user's portfolio, holdings, investments (with plan info),
@@ -980,8 +1168,77 @@ function InvestmentRow({ inv, planName, currency }) {
   );
 }
 
+// ─── Live asset card with animated prices ─────────────────────────────────────
+function LiveAssetCard({ coin, priceData, onClick, showDescription = true }) {
+  const price = priceData?.price;
+  const change = priceData?.change24h;
+  return (
+    <button className="asset-card live-asset-card" onClick={onClick}>
+      <CoinLogo coin={coin} />
+      <div className="asset-info">
+        <h3>{coin.name}</h3>
+        <span>{coin.symbol}</span>
+        {showDescription && <p>{coin.description}</p>}
+      </div>
+      <div className="asset-value">
+        <strong className="asset-price"><AnimatedPrice value={price} format={fmtCryptoPrice} /></strong>
+        <AnimatedChange value={change} />
+      </div>
+      <span className="details">Details <ArrowUpRight size={16} /></span>
+    </button>
+  );
+}
+
+// ─── Testimonials section ─────────────────────────────────────────────────────
+const testimonials = [
+  { name: 'Sarah Chen', role: 'Long-term investor', initials: 'SC', rating: 5, text: 'Nexora Capital gave me a clear, stress-free way to manage my digital assets. The portfolio dashboard is exactly what I needed.' },
+  { name: 'Marcus Reid', role: 'Crypto enthusiast', initials: 'MR', rating: 5, text: 'The live price tracking and investment plans are fantastic. I finally feel in control of my portfolio without constant app-hopping.' },
+  { name: 'Elena Vasquez', role: 'New to digital assets', initials: 'EV', rating: 5, text: 'As someone just starting out, the platform is approachable and easy to understand. The fixed-return plans gave me confidence to begin.' },
+  { name: 'David Okafor', role: 'Active trader', initials: 'DO', rating: 5, text: 'Real-time prices across twelve coins, clean charts, and instant withdrawals. Nexora nailed the details that matter to serious investors.' },
+  { name: 'Priya Sharma', role: 'Portfolio builder', initials: 'PS', rating: 5, text: 'I love how everything lives in one place — deposits, investments, and live market data. The interface is calm and focused.' },
+  { name: 'James Thompson', role: 'Retirement planner', initials: 'JT', rating: 5, text: 'The guaranteed fixed-return investment plans fit perfectly into my long-term strategy. Transparent terms, no surprises.' },
+];
+
+function StarRating({ count }) {
+  return (
+    <span className="star-rating">
+      {Array.from({ length: count }).map((_, i) => (
+        <svg key={i} width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+      ))}
+    </span>
+  );
+}
+
+function TestimonialsSection() {
+  return (
+    <section className="testimonials-section page-pad">
+      <div className="section-heading centered">
+        <span className="eyebrow green">Loved by investors</span>
+        <h2>What our community says.</h2>
+        <p>Real experiences from people building their digital asset portfolios with Nexora Capital.</p>
+      </div>
+      <div className="testimonial-grid">
+        {testimonials.map((t, i) => (
+          <div className="testimonial-card" key={i}>
+            <div className="testimonial-head">
+              <div className="testimonial-avatar">{t.initials}</div>
+              <div>
+                <strong>{t.name}</strong>
+                <span>{t.role}</span>
+              </div>
+            </div>
+            <StarRating count={t.rating} />
+            <p>"{t.text}"</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 // ─── Pages ────────────────────────────────────────────────────────────────────
 function HomePage({ onNavigate }) {
+  const { prices, loading, lastUpdated, stale, live } = useCryptoPrices(true);
   return (
     <>
       <TopNav active="home" onNavigate={onNavigate} />
@@ -1001,12 +1258,32 @@ function HomePage({ onNavigate }) {
         </section>
         <section className="assets-section page-pad">
           <div className="section-heading">
-            <div><span className="eyebrow green">Explore digital assets</span><h2>Build your perspective.</h2></div>
-            <button className="text-link" onClick={() => onNavigate('investments')}>View all assets <ArrowUpRight size={16} /></button>
+            <div><span className="eyebrow green">Live market prices</span><h2>Build your perspective.</h2></div>
+            <div className="assets-heading-right">
+              <LiveDot live={live} stale={stale} />
+              <button className="text-link" onClick={() => onNavigate('assets')}>View all assets <ArrowUpRight size={16} /></button>
+            </div>
           </div>
-          <div className="asset-grid">
-            {assets.map(asset => <AssetCard asset={asset} key={asset.symbol} onClick={() => onNavigate('investments')} />)}
-          </div>
+          {loading ? (
+            <div className="asset-grid">
+              {COINS.slice(0, 6).map(coin => (
+                <div className="asset-card live-asset-card loading-card" key={coin.symbol}>
+                  <CoinLogo coin={coin} />
+                  <div className="asset-info"><h3>{coin.name}</h3><span>{coin.symbol}</span><p>{coin.description}</p></div>
+                  <div className="asset-value"><strong className="price-placeholder">—</strong><span className="muted">Loading…</span></div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="asset-grid">
+              {COINS.slice(0, 6).map(coin => (
+                <LiveAssetCard key={coin.symbol} coin={coin} priceData={prices[coin.symbol]} onClick={() => onNavigate('assets')} />
+              ))}
+            </div>
+          )}
+          {stale && lastUpdated && (
+            <p className="stale-notice">Showing last known prices. Live data is temporarily unavailable.</p>
+          )}
         </section>
         <section className="features page-pad">
           <div className="section-heading centered">
@@ -1020,6 +1297,7 @@ function HomePage({ onNavigate }) {
             <Feature icon={BarChart3} title="Invest with context" text="Explore assets with the details you need to make your own decisions." />
           </div>
         </section>
+        <TestimonialsSection />
         <section className="cta page-pad">
           <div>
             <span className="eyebrow">Your next chapter starts here</span>
@@ -1034,9 +1312,107 @@ function HomePage({ onNavigate }) {
   );
 }
 
+// ─── All Assets page ──────────────────────────────────────────────────────────
+function AssetsPage({ onNavigate }) {
+  const { prices, loading, lastUpdated, stale, live, reload } = useCryptoPrices(true);
+  const [search, setSearch] = useState('');
+  const [sortBy, setSortBy] = useState('name');
+  const [sortDir, setSortDir] = useState('asc');
+
+  const filtered = COINS.filter(c => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    return c.name.toLowerCase().includes(q) || c.symbol.toLowerCase().includes(q);
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    let av, bv;
+    if (sortBy === 'name') { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
+    else if (sortBy === 'price') { av = prices[a.symbol]?.price ?? 0; bv = prices[b.symbol]?.price ?? 0; }
+    else if (sortBy === 'change') { av = prices[a.symbol]?.change24h ?? 0; bv = prices[b.symbol]?.change24h ?? 0; }
+    else { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
+    if (av < bv) return sortDir === 'asc' ? -1 : 1;
+    if (av > bv) return sortDir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
+  function toggleSort(col) {
+    if (sortBy === col) { setSortDir(d => d === 'asc' ? 'desc' : 'asc'); }
+    else { setSortBy(col); setSortDir(col === 'change' || col === 'price' ? 'desc' : 'asc'); }
+  }
+
+  const lastUpdatedLabel = lastUpdated
+    ? new Date(lastUpdated).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : '—';
+
+  return (
+    <>
+      <TopNav active="assets" onNavigate={onNavigate} />
+      <main className="page-pad inner-page">
+        <PageHeader eyebrow="Live market" title="All digital assets." text="Real-time USD prices for twelve leading cryptocurrencies, updated every 20 seconds." />
+
+        <div className="assets-toolbar">
+          <div className="assets-search">
+            <Filter size={16} />
+            <input
+              type="text"
+              placeholder="Search by name or ticker…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="assets-status">
+            <LiveDot live={live} stale={stale} />
+            <span className="muted last-updated">Updated {lastUpdatedLabel}</span>
+          </div>
+        </div>
+
+        {stale && (
+          <p className="stale-notice">Live data is temporarily unavailable. Showing last known prices.</p>
+        )}
+
+        {loading ? (
+          <LoadingState label="Fetching live prices…" />
+        ) : sorted.length === 0 ? (
+          <div className="card">
+            <EmptyState icon={Filter} title="No coins found" text="Try a different search term." />
+          </div>
+        ) : (
+          <div className="assets-table card">
+            <div className="assets-table-head">
+              <button className={sortBy === 'name' ? 'active' : ''} onClick={() => toggleSort('name')}>Coin</button>
+              <button className={`col-price ${sortBy === 'price' ? 'active' : ''}`} onClick={() => toggleSort('price')}>Price</button>
+              <button className={`col-change ${sortBy === 'change' ? 'active' : ''}`} onClick={() => toggleSort('change')}>24h Change</button>
+              <span className="col-action"></span>
+            </div>
+            {sorted.map(coin => {
+              const pd = prices[coin.symbol];
+              return (
+                <div className="assets-table-row" key={coin.symbol}>
+                  <div className="at-coin">
+                    <CoinLogo coin={coin} size={40} />
+                    <div><strong>{coin.name}</strong><span>{coin.symbol}</span></div>
+                  </div>
+                  <div className="at-price"><AnimatedPrice value={pd?.price} format={fmtCryptoPrice} /></div>
+                  <div className="at-change"><AnimatedChange value={pd?.change24h} /></div>
+                  <div className="at-action">
+                    <button className="text-link" onClick={() => onNavigate('investments')}>Details <ArrowUpRight size={14} /></button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </main>
+      <Footer onNavigate={onNavigate} />
+    </>
+  );
+}
+
 function InvestmentsPage({ onNavigate }) {
   const { session } = useAuth();
   const signedIn = !!session;
+  const { prices } = useCryptoPrices(!signedIn);
   const { plans, loading: plansLoading, error: plansError, reload: reloadPlans } = useInvestmentPlans(signedIn);
   const data = usePortfolioData(signedIn);
   const [txModal, setTxModal] = useState(null);
@@ -1069,7 +1445,9 @@ function InvestmentsPage({ onNavigate }) {
 
           {!signedIn ? (
             <div className="plan-grid">
-              {assets.map(asset => <AssetCard key={asset.symbol} asset={asset} onClick={() => onNavigate('signin')} />)}
+              {COINS.slice(0, 3).map(coin => (
+                <LiveAssetCard key={coin.symbol} coin={coin} priceData={prices[coin.symbol]} onClick={() => onNavigate('signin')} />
+              ))}
             </div>
           ) : plansLoading ? (
             <LoadingState label="Loading plans…" />
@@ -3419,6 +3797,7 @@ function App() {
   const view =
     page === 'home'        ? <HomePage        onNavigate={setPage} /> :
     page === 'investments' ? <InvestmentsPage onNavigate={setPage} /> :
+    page === 'assets'      ? <AssetsPage      onNavigate={setPage} /> :
     page === 'portfolio'   ? <PortfolioPage   onNavigate={setPage} /> :
     page === 'dashboard'   ? <DashboardPage   onNavigate={setPage} /> :
     page === 'transactions'? <TransactionsPage onNavigate={setPage} /> :

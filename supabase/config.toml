@@ -1,0 +1,2 @@
+[functions.crypto-prices]
+verify_jwt = false
