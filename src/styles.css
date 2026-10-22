@@ -124,6 +124,33 @@
 .card-footer-link{padding:12px 16px;border-top:1px solid var(--border);text-align:center}
 /* ─── Allocation ring position fix ─────────────────────────────────────────── */
 .allocation-ring{position:relative}
+/* ─── App showcase: smartphone mockup (public homepage) ───────────────────── */
+.app-showcase{display:flex;justify-content:center;align-items:center;position:relative;perspective:1200px}
+.phone-mockup{position:relative;width:300px;height:600px;border-radius:42px;background:linear-gradient(145deg,#1a2e25,#0f1d17);padding:10px;box-shadow:0 30px 60px rgba(24,74,51,.22),0 10px 30px rgba(24,74,51,.12),inset 0 0 0 2px rgba(255,255,255,.06);transition:transform .4s ease;animation:phoneFloat 6s ease-in-out infinite}
+.phone-mockup:hover{transform:translateY(-6px) rotateY(-3deg)}
+@keyframes phoneFloat{0%,100%{transform:translateY(0) rotateY(0)}50%{transform:translateY(-10px) rotateY(1deg)}}
+.phone-notch{position:absolute;top:14px;left:50%;transform:translateX(-50%);width:100px;height:22px;background:#0f1d17;border-radius:0 0 16px 16px;z-index:3}
+.phone-screen{width:100%;height:100%;border-radius:34px;background:linear-gradient(180deg,#f5fff9 0%,#ffffff 30%,#f5fff9 100%);overflow:hidden;position:relative;display:flex;flex-direction:column}
+.phone-status-bar{display:flex;justify-content:space-between;align-items:center;padding:14px 22px 6px;font-size:12px;font-weight:700;color:var(--forest)}
+.phone-status-icons{display:flex;align-items:center;gap:5px;color:var(--forest)}
+.phone-app-content{flex:1;display:flex;flex-direction:column;align-items:center;padding:22px 20px 26px;text-align:center;overflow:hidden}
+.phone-app-icon{width:64px;height:64px;border-radius:18px;background:linear-gradient(135deg,#8ee2c1,#00a878);display:grid;place-items:center;box-shadow:0 10px 24px rgba(0,168,120,.3);margin-bottom:14px;flex-shrink:0}
+.phone-app-title{font-size:19px;font-weight:800;color:var(--forest);letter-spacing:-.03em;margin:0;line-height:1.1}
+.phone-app-tag{font-size:10px;letter-spacing:.2em;font-weight:800;color:var(--green);text-transform:uppercase;margin-top:6px}
+.phone-welcome{margin:22px 0 18px;width:100%}
+.phone-welcome-eyebrow{font-size:11px;font-weight:800;color:var(--green);letter-spacing:.05em;text-transform:uppercase}
+.phone-welcome p{font-size:13px;color:var(--muted);line-height:1.6;margin:8px 0 0}
+.phone-mock-rows{display:flex;flex-direction:column;gap:10px;width:100%;flex:1}
+.phone-mock-row{display:flex;align-items:center;gap:10px;padding:10px 12px;background:#fff;border:1px solid var(--border);border-radius:14px;box-shadow:0 2px 8px rgba(24,74,51,.04)}
+.phone-mock-icon{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:13px;font-weight:800;flex-shrink:0}
+.phone-mock-bar{flex:1;display:flex;flex-direction:column;align-items:flex-start;gap:1px}
+.phone-mock-bar span:first-child{font-size:12px;font-weight:700;color:var(--forest)}
+.phone-mock-bar span:last-child{font-size:10px;color:var(--muted)}
+.phone-mock-val{font-size:12px;font-weight:700;color:var(--muted)}
+.phone-cta-btn{width:100%;padding:13px;border-radius:16px;background:var(--green);color:#fff;font-weight:800;font-size:14px;border:0;cursor:pointer;box-shadow:0 6px 16px rgba(0,168,120,.25);transition:.2s ease;margin-top:14px;flex-shrink:0}
+.phone-cta-btn:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(0,168,120,.35)}
+.phone-glow{position:absolute;inset:-40px -40px -40px -40px;background:radial-gradient(ellipse at center,rgba(0,168,120,.08) 0%,transparent 65%);z-index:-1;pointer-events:none}
+@media(max-width:850px){.phone-mockup{width:260px;height:520px;animation:none}.phone-app-icon{width:54px;height:54px}.phone-app-title{font-size:17px}.phone-welcome p{font-size:12px}.phone-mock-row{padding:8px 10px}.phone-mock-icon{width:28px;height:28px;font-size:11px}}
 /* ─── Live crypto prices ──────────────────────────────────────────────────── */
 .coin-logo{display:grid;place-items:center;border-radius:50%;color:#fff;font-weight:800;flex-shrink:0;letter-spacing:-.02em}
 .price-placeholder{color:var(--muted);font-size:18px}

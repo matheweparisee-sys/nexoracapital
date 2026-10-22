@@ -5,7 +5,7 @@ import {
   Clock3, Copy, FileText, Filter, Grid2X2, Headphones, Home, Inbox, Layers, LogIn, LogOut,
   Mail, Menu, MessageSquare, MoreHorizontal, Pencil, ShieldCheck, ShieldX, Sparkles,
   Upload, UserCheck, Wallet, X,
-  PieChart, Plus, Send, Settings,
+  PieChart, Plus, Send, Settings, Activity,
 } from 'lucide-react';
 import { supabase } from './supabase.js';
 import './styles.css';
@@ -977,25 +977,54 @@ function Chart({ small = false }) {
   );
 }
 
-function PortfolioPreview({ onNavigate }) {
+// ─── App showcase: smartphone mockup with branded green app icon ─────────────
+function AppShowcase({ onNavigate }) {
   return (
-    <div className="preview-card">
-      <div className="preview-top">
-        <div>
-          <span className="eyebrow">Portfolio overview</span>
-          <h2>$24,680.50</h2>
-          <span className="muted">Total portfolio value</span>
+    <div className="app-showcase">
+      <div className="phone-mockup">
+        <div className="phone-notch"></div>
+        <div className="phone-screen">
+          <div className="phone-status-bar">
+            <span>9:41</span>
+            <span className="phone-status-icons">
+              <svg width="14" height="10" viewBox="0 0 14 10" fill="currentColor"><path d="M1 7h2v2H1zM4 5h2v4H4zM7 3h2v6H7zM10 1h2v8h-2z"/></svg>
+              <svg width="16" height="10" viewBox="0 0 16 10" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="1" y="2" width="11" height="6" rx="1.5"/><rect x="13" y="4" width="1.5" height="2" rx=".5" fill="currentColor"/><rect x="2.5" y="3.5" width="7" height="3" rx=".5" fill="currentColor"/></svg>
+            </span>
+          </div>
+          <div className="phone-app-content">
+            <div className="phone-app-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 17l6-6 4 4 8-8"/>
+                <path d="M17 7h4v4"/>
+              </svg>
+            </div>
+            <h3 className="phone-app-title">Nexora Capital</h3>
+            <span className="phone-app-tag">Digital investing</span>
+            <div className="phone-welcome">
+              <span className="phone-welcome-eyebrow">Welcome back</span>
+              <p>Track your portfolio, explore live market prices, and manage your investments — all in one place.</p>
+            </div>
+            <div className="phone-mock-rows">
+              <div className="phone-mock-row">
+                <div className="phone-mock-icon" style={{ background: '#f7931a' }}>B</div>
+                <div className="phone-mock-bar"><span>Bitcoin</span><span>BTC</span></div>
+                <div className="phone-mock-val">$—</div>
+              </div>
+              <div className="phone-mock-row">
+                <div className="phone-mock-icon" style={{ background: '#627eea' }}>E</div>
+                <div className="phone-mock-bar"><span>Ethereum</span><span>ETH</span></div>
+                <div className="phone-mock-val">$—</div>
+              </div>
+              <div className="phone-mock-row">
+                <div className="phone-mock-icon" style={{ background: '#00a878' }}>S</div>
+                <div className="phone-mock-bar"><span>Solana</span><span>SOL</span></div>
+                <div className="phone-mock-val">$—</div>
+              </div>
+            </div>
+            <button className="phone-cta-btn" onClick={() => onNavigate('signup')}>Get Started</button>
+          </div>
         </div>
-        <div className="soft-icon"><Wallet size={23} /></div>
-      </div>
-      <div className="preview-heading">
-        <div><strong>Portfolio performance</strong><span>Illustrative chart layout</span></div>
-        <div className="legend"><i /> Portfolio value</div>
-      </div>
-      <Chart small />
-      <div className="preview-bottom">
-        <span><b>+8.24%</b> this month</span>
-        <button onClick={() => onNavigate('portfolio')}>View portfolio <ArrowUpRight size={16} /></button>
+        <div className="phone-glow"></div>
       </div>
     </div>
   );
@@ -1250,11 +1279,11 @@ function HomePage({ onNavigate }) {
             <p>Explore digital assets with a clear portfolio overview and tools to help you make informed investment decisions.</p>
             <div className="hero-actions">
               <Button onClick={() => onNavigate('investments')} icon={ArrowUpRight}>Explore investments</Button>
-              <Button variant="outline" onClick={() => onNavigate('dashboard')}>View dashboard</Button>
+              <Button variant="outline" onClick={() => onNavigate('signup')}>Get started</Button>
             </div>
             <div className="hero-trust"><ShieldCheck size={18} /> Built with clarity, security, and long-term thinking.</div>
           </div>
-          <PortfolioPreview onNavigate={onNavigate} />
+          <AppShowcase onNavigate={onNavigate} />
         </section>
         <section className="assets-section page-pad">
           <div className="section-heading">
