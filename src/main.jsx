@@ -934,15 +934,15 @@ function Footer({ onNavigate }) {
           </div>
           <div>
             <strong>Company</strong>
-            <button>About Nexora</button>
-            <button>Insights</button>
-            <button>Contact</button>
+            <button type="button" onClick={() => onNavigate('home')} aria-label="About Nexora Capital">About Nexora</button>
+            <button type="button" onClick={() => onNavigate('assets')} aria-label="Explore market insights and digital assets">Insights</button>
+            <button type="button" onClick={() => onNavigate('support')} aria-label="Contact Nexora Capital support">Contact</button>
           </div>
           <div>
             <strong>Support</strong>
-            <button onClick={() => onNavigate('support')}>Help center</button>
-            <button>Security</button>
-            <button>Terms</button>
+            <button type="button" onClick={() => onNavigate('support')}>Help center</button>
+            <button type="button" onClick={() => onNavigate('support')} aria-label="Get help with security questions">Security</button>
+            <button type="button" onClick={() => onNavigate('support')} aria-label="Ask support about terms and conditions">Terms</button>
           </div>
         </div>
       </div>
