@@ -544,7 +544,7 @@ function TxModal({ open, mode, onClose, cashBalance, currency, plans, onDone, on
       setSuccess(isDeposit
         ? 'Deposit request submitted. We will verify your Bitcoin payment and update the status.'
         : isInvest
-        ? 'Investment submitted. It will appear in your portfolio once approved and activated by an administrator.'
+        ? 'Investment activated successfully. You can track its progress in your portfolio.'
         : 'Request submitted. You can track its status in your portfolio.');
       setTimeout(() => { onDone(); onClose(); }, 1600);
     } catch (err) {
@@ -756,7 +756,7 @@ function InvestmentConfirmation({ open, result, onClose, onNavigate, currency })
       <div className="confirm-body">
         <div className="confirm-check"><Check size={28} /></div>
         <p className="confirm-intro">
-          Your investment has been recorded successfully. It will appear in your portfolio once approved and activated by an administrator.
+          Your investment has been activated and added to your portfolio. You can track its progress and return history from the investment record.
         </p>
 
         {loading ? (
@@ -767,7 +767,7 @@ function InvestmentConfirmation({ open, result, onClose, onNavigate, currency })
             <div className="confirm-row"><span>Amount invested</span><strong>{fmtMoney(amt, currency)}</strong></div>
             <div className="confirm-row"><span>Date</span><strong>{fmtDate(details?.created_at || now.toISOString())}</strong></div>
             {details?.reference && <div className="confirm-row"><span>Reference</span><strong className="mono">{details.reference}</strong></div>}
-            <div className="confirm-row"><span>Status</span><StatusBadge status={details?.status || 'pending'} /></div>
+            <div className="confirm-row"><span>Status</span><StatusBadge status={details?.status || 'active'} /></div>
             {duration > 0 && <div className="confirm-row"><span>Duration</span><strong>{duration} days</strong></div>}
             {maturityDate && <div className="confirm-row"><span>Expected maturity</span><strong>{fmtDate(maturityDate.toISOString())}</strong></div>}
             <div className="confirm-row"><span>Payment schedule</span><strong>{schedule}</strong></div>
@@ -1175,34 +1175,138 @@ function PlanCard({ plan, onNavigate, onInvest, cashBalance, currency }) {
   );
 }
 
-// Investment record row — shows plan name, principal, returns credited, total
-// value, maturity date, and status.
-function InvestmentRow({ inv, planName, currency }) {
+// Investment record row with time-based progress and a clickable details view.
+function InvestmentRow({ inv, planName, currency, onClick }) {
   const principal = Number(inv.amount ?? 0);
   const returnsCredited = Number(inv.returns_credited ?? 0);
   const expectedReturn = Number(inv.expected_return ?? 0);
   const totalValue = principal + returnsCredited;
   const cur = currency || 'USD';
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (inv.status !== 'active') return undefined;
+    const timer = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, [inv.status]);
+
+  const start = inv.started_at ? new Date(inv.started_at).getTime() : null;
+  const end = inv.maturity_date ? new Date(inv.maturity_date).getTime() : null;
+  const hasTimeline = Number.isFinite(start) && Number.isFinite(end) && end > start;
+  const progress = inv.status === 'completed' ? 100 :
+    (inv.status === 'active' && hasTimeline ? Math.max(0, Math.min(100, ((now - start) / (end - start)) * 100)) : 0);
+  const remainingMs = hasTimeline ? Math.max(0, end - now) : 0;
+  const remainingDays = Math.ceil(remainingMs / 86400000);
 
   return (
-    <div className="inv-row">
+    <button
+      type="button"
+      className="inv-row inv-row-button"
+      onClick={() => onClick?.(inv)}
+      aria-label={`View ${planName || 'investment'} details`}
+      style={{ width: '100%', textAlign: 'left', color: 'inherit', font: 'inherit', background: 'transparent', border: 0, cursor: 'pointer' }}
+    >
       <div className="inv-main">
         <strong>{planName || 'Investment plan'}</strong>
         <span>Started {fmtDate(inv.started_at || inv.created_at)}{inv.maturity_date ? ` · Matures ${fmtDate(inv.maturity_date)}` : ''}</span>
+        {inv.status === 'active' && hasTimeline && (
+          <div style={{ marginTop: 8, width: '100%', maxWidth: 320 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 5, fontSize: 11, color: 'var(--muted)' }}>
+              <span>{progress.toFixed(1)}% complete</span>
+              <span>{remainingDays > 0 ? `${remainingDays} day${remainingDays === 1 ? '' : 's'} left` : 'Maturity reached'}</span>
+            </div>
+            <div style={{ height: 7, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}>
+              <div style={{ height: '100%', width: `${progress}%`, background: 'linear-gradient(90deg, #10b981, #b7f56a)', borderRadius: 99, transition: 'width 0.5s ease' }} />
+            </div>
+          </div>
+        )}
+        <span style={{ marginTop: 5, fontSize: 11, color: 'var(--muted)' }}>Tap to view investment record ↗</span>
       </div>
       <div className="inv-amount">
         <strong>{fmtMoney(principal, cur)}</strong>
         {returnsCredited > 0 ? (
           <span className="muted">Returns {fmtMoney(returnsCredited, cur)}</span>
         ) : expectedReturn > 0 ? (
-          <span className="muted">Expected {fmtMoney(expectedReturn, cur)}</span>
+          <span className="muted">Expected profit {fmtMoney(expectedReturn, cur)}</span>
         ) : null}
-        {returnsCredited > 0 && (
-          <span className="muted">Total {fmtMoney(totalValue, cur)}</span>
-        )}
+        {returnsCredited > 0 && <span className="muted">Balance + credited returns {fmtMoney(totalValue, cur)}</span>}
       </div>
       <StatusBadge status={inv.status} />
-    </div>
+    </button>
+  );
+}
+
+function InvestmentDetailModal({ investment, planName, currency, onClose }) {
+  const [credits, setCredits] = useState([]);
+  const [loadingCredits, setLoadingCredits] = useState(false);
+  const [creditsError, setCreditsError] = useState('');
+
+  useEffect(() => {
+    if (!investment?.id) { setCredits([]); return undefined; }
+    let cancelled = false;
+    setLoadingCredits(true);
+    setCreditsError('');
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('return_credits')
+          .select('id,amount,credit_type,period_number,credit_date,created_at')
+          .eq('investment_id', investment.id)
+          .order('credit_date', { ascending: true });
+        if (error) throw error;
+        if (!cancelled) setCredits(data || []);
+      } catch {
+        if (!cancelled) { setCredits([]); setCreditsError('Return history is not available yet.'); }
+      } finally {
+        if (!cancelled) setLoadingCredits(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [investment?.id]);
+
+  if (!investment) return null;
+  const principal = Number(investment.amount || 0);
+  const expected = Number(investment.expected_return || 0);
+  const credited = Number(investment.returns_credited || 0);
+  const start = investment.started_at ? new Date(investment.started_at).getTime() : null;
+  const end = investment.maturity_date ? new Date(investment.maturity_date).getTime() : null;
+  const validTimeline = Number.isFinite(start) && Number.isFinite(end) && end > start;
+  const progress = investment.status === 'completed' ? 100 :
+    (investment.status === 'active' && validTimeline ? Math.max(0, Math.min(100, ((Date.now() - start) / (end - start)) * 100)) : 0);
+  return (
+    <Modal open={!!investment} onClose={onClose} title="Investment record" eyebrow="Portfolio details">
+      <div className="confirm-body">
+        <div className="confirm-details">
+          <div className="confirm-row"><span>Investment plan</span><strong>{planName || 'Investment plan'}</strong></div>
+          <div className="confirm-row"><span>Principal invested</span><strong>{fmtMoney(principal, currency)}</strong></div>
+          <div className="confirm-row"><span>Status</span><StatusBadge status={investment.status} /></div>
+          <div className="confirm-row"><span>Created</span><strong>{fmtDate(investment.created_at)}</strong></div>
+          <div className="confirm-row"><span>Started</span><strong>{fmtDate(investment.started_at)}</strong></div>
+          <div className="confirm-row"><span>Maturity date</span><strong>{fmtDate(investment.maturity_date)}</strong></div>
+          <div className="confirm-row"><span>Expected profit</span><strong className="green-text">{fmtMoney(expected, currency)}</strong></div>
+          <div className="confirm-row"><span>Returns credited</span><strong>{fmtMoney(credited, currency)}</strong></div>
+          <div className="confirm-row"><span>Principal + credited returns</span><strong>{fmtMoney(principal + credited, currency)}</strong></div>
+        </div>
+        {investment.status === 'active' && validTimeline && (
+          <div style={{ margin: '8px 0 18px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 7, fontSize: 12 }}><strong>Investment progress</strong><strong>{progress.toFixed(1)}%</strong></div>
+            <div style={{ height: 10, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}><div style={{ height: '100%', width: `${progress}%`, background: 'linear-gradient(90deg, #10b981, #b7f56a)', transition: 'width 0.5s ease' }} /></div>
+          </div>
+        )}
+        <h3 style={{ margin: '8px 0 10px' }}>Return history</h3>
+        {loadingCredits ? <LoadingState label="Loading return history…" /> : creditsError ? <p className="muted">{creditsError}</p> : credits.length === 0 ? <p className="muted">No returns have been credited to this investment yet.</p> : (
+          <div className="activity">
+            {credits.map(credit => (
+              <div className="activity-row" key={credit.id}>
+                <div className="activity-icon"><Activity size={16} /></div>
+                <div><strong>{credit.credit_type === 'principal' ? 'Principal returned' : 'Return credited'}</strong><span>{fmtDate(credit.credit_date || credit.created_at)} · Period {credit.period_number}</span></div>
+                <div className="activity-right"><strong>{fmtMoney(credit.amount, currency)}</strong></div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="confirm-actions"><Button onClick={onClose}>Close record</Button></div>
+      </div>
+    </Modal>
   );
 }
 
@@ -1456,6 +1560,7 @@ function InvestmentsPage({ onNavigate }) {
   const [txModal, setTxModal] = useState(null);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [confirmResult, setConfirmResult] = useState(null);
+  const [selectedInvestment, setSelectedInvestment] = useState(null);
 
   function openInvest(plan) {
     setSelectedPlan(plan);
@@ -1529,7 +1634,7 @@ function InvestmentsPage({ onNavigate }) {
               ) : data.investments.length === 0 ? (
                 <EmptyState icon={Inbox} title="No investments yet" text="Your investment records will appear here once you start one." />
               ) : (
-                data.investments.map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} />)
+                data.investments.map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} onClick={setSelectedInvestment} />)
               )}
             </div>
           </section>
@@ -1559,12 +1664,15 @@ function InvestmentsPage({ onNavigate }) {
             currency={currency}
           />
         )}
+        {signedIn && selectedInvestment && (
+          <InvestmentDetailModal investment={selectedInvestment} planName={planNameById[selectedInvestment.plan_id]} currency={currency} onClose={() => setSelectedInvestment(null)} />
+        )}
 
         <div className="disclaimer">
           <ShieldCheck size={20} />
           <div>
             <strong>Guaranteed fixed returns</strong>
-            <p>Returns are calculated from the plan's stored rate and duration, credited by the platform after admin verification. Terms are set by Nexora Capital and cannot be changed by customers.</p>
+            <p>Your investment activates when the request is accepted and your available balance is sufficient. Progress is based on the recorded start and maturity dates. Return credits appear in the investment record when they are posted.</p>
           </div>
         </div>
       </main>
@@ -1585,6 +1693,7 @@ function PortfolioContent({ onNavigate }) {
   const { plans } = useInvestmentPlans(true);
   const data = usePortfolioData(true);
   const { portfolio, holdings, investments, transactions, loading, error, reload } = data;
+  const [selectedInvestment, setSelectedInvestment] = useState(null);
   const currency = portfolio?.currency || 'USD';
 
   const planNameById = {};
@@ -1657,7 +1766,7 @@ function PortfolioContent({ onNavigate }) {
             {investments.length === 0 ? (
               <EmptyState icon={Inbox} title="No investments yet" text="Your investment records will appear here once you start one." action={<Button variant="outline" onClick={() => onNavigate('investments')}>View plans <ArrowUpRight size={16} /></Button>} />
             ) : (
-              investments.map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} />)
+              investments.map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} onClick={setSelectedInvestment} />)
             )}
           </div>
 
@@ -1685,6 +1794,9 @@ function PortfolioContent({ onNavigate }) {
               </div>
             )}
           </div>
+          {selectedInvestment && (
+            <InvestmentDetailModal investment={selectedInvestment} planName={planNameById[selectedInvestment.plan_id]} currency={currency} onClose={() => setSelectedInvestment(null)} />
+          )}
         </>
         )}
       </main>
@@ -1718,6 +1830,7 @@ function DashboardContent({ onNavigate }) {
   const currency = portfolio?.currency || 'USD';
   const [txModal, setTxModal] = useState(null);
   const [confirmResult, setConfirmResult] = useState(null);
+  const [selectedInvestment, setSelectedInvestment] = useState(null);
 
   function openTx(mode) { setTxModal(mode); }
   function closeTx() { setTxModal(null); }
@@ -1851,7 +1964,7 @@ function DashboardContent({ onNavigate }) {
             {investments.length === 0 ? (
               <EmptyState icon={Inbox} title="No investments yet" text="Start an investment from the plans page." action={<Button variant="outline" onClick={() => onNavigate('investments')}>View plans <ArrowUpRight size={16} /></Button>} />
             ) : (
-              investments.slice(0, 5).map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} />)
+              investments.slice(0, 5).map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} onClick={setSelectedInvestment} />)
             )}
           </div>
         </>
@@ -1875,6 +1988,9 @@ function DashboardContent({ onNavigate }) {
         onNavigate={onNavigate}
         currency={currency}
       />
+      {selectedInvestment && (
+        <InvestmentDetailModal investment={selectedInvestment} planName={planNameById[selectedInvestment.plan_id]} currency={currency} onClose={() => setSelectedInvestment(null)} />
+      )}
     </>
   );
 }
