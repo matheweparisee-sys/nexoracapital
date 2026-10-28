@@ -72,18 +72,13 @@ function fmtPct(value) {
   return `${n.toFixed(2)}%`;
 }
 
-// Keep browser estimates consistent with the server-side investment formula.
-// Rates are annual percentages; duration is in days. This returns profit only,
-// not principal, and mirrors admin_activate_investment in the SQL migration.
-function calculateExpectedReturn(principal, annualRatePercent, durationDays, method = 'simple') {
+// The configured fixed_return_rate is the total return percentage for the
+// selected investment plan (not an annualized APY). This returns profit only.
+function calculateExpectedReturn(principal, returnRatePercent) {
   const amount = Number(principal);
-  const rate = Number(annualRatePercent);
-  const days = Number(durationDays);
-  if (![amount, rate, days].every(Number.isFinite) || amount <= 0 || rate < 0 || days <= 0) return 0;
-  const annualRate = rate / 100;
-  const profit = method === 'compound'
-    ? amount * (Math.pow(1 + annualRate, days / 365) - 1)
-    : amount * annualRate * (days / 365);
+  const rate = Number(returnRatePercent);
+  if (![amount, rate].every(Number.isFinite) || amount <= 0 || rate < 0) return 0;
+  const profit = amount * (rate / 100);
   return Math.round((profit + Number.EPSILON) * 100) / 100;
 }
 
@@ -687,11 +682,11 @@ function TxModal({ open, mode, onClose, cashBalance, currency, plans, onDone, on
 
         {isInvest && selectedPlan && (
           <div className="tx-info invest-preview">
-            <span>Fixed return: <strong>{fmtPct(Number(selectedPlan.fixed_return_rate ?? 0))} APY</strong></span>
+            <span>Fixed return: <strong>{fmtPct(Number(selectedPlan.fixed_return_rate ?? selectedPlan.target_return ?? 0))} total return</strong></span>
             <span>Duration: <strong>{selectedPlan.duration_days} days</strong></span>
             <span>Payments: <strong>{selectedPlan.payment_schedule === 'monthly' ? 'Monthly' : 'At maturity'}</strong></span>
             {amount && parseFloat(amount) > 0 && (
-              <span>Est. return: <strong className="green-text">{fmtMoney(calculateExpectedReturn(parseFloat(amount), selectedPlan.fixed_return_rate ?? selectedPlan.target_return ?? 0, selectedPlan.duration_days, selectedPlan.return_calc_method ?? 'simple'), currency)}</strong></span>
+              <span>Est. return: <strong className="green-text">{fmtMoney(calculateExpectedReturn(parseFloat(amount), selectedPlan.fixed_return_rate ?? selectedPlan.target_return ?? 0), currency)}</strong></span>
             )}
             <span>Available: <strong>{fmtMoney(cashBalance, currency)}</strong></span>
           </div>
@@ -755,7 +750,7 @@ function InvestmentConfirmation({ open, result, onClose, onNavigate, currency })
   const schedule = plan?.payment_schedule === 'monthly' ? 'Monthly payments' : 'Paid at maturity';
   const expectedReturn = details?.expected_return != null
     ? Number(details.expected_return)
-    : calculateExpectedReturn(amt, rate, duration, plan?.return_calc_method ?? 'simple');
+    : calculateExpectedReturn(amt, rate);
   return (
     <Modal open={open} onClose={onClose} title="Investment confirmed" eyebrow="Success">
       <div className="confirm-body">
@@ -776,7 +771,7 @@ function InvestmentConfirmation({ open, result, onClose, onNavigate, currency })
             {duration > 0 && <div className="confirm-row"><span>Duration</span><strong>{duration} days</strong></div>}
             {maturityDate && <div className="confirm-row"><span>Expected maturity</span><strong>{fmtDate(maturityDate.toISOString())}</strong></div>}
             <div className="confirm-row"><span>Payment schedule</span><strong>{schedule}</strong></div>
-            <div className="confirm-row"><span>Fixed return rate</span><strong>{fmtPct(rate)} APY</strong></div>
+            <div className="confirm-row"><span>Fixed return rate</span><strong>{fmtPct(rate)} total return</strong></div>
             {expectedReturn > 0 && <div className="confirm-row"><span>Expected return</span><strong className="green-text">{fmtMoney(expectedReturn, currency)}</strong></div>}
           </div>
         )}
@@ -1148,7 +1143,7 @@ function PlanCard({ plan, onNavigate, onInvest, cashBalance, currency }) {
   const maxAmt = plan.max_amount ? Number(plan.max_amount) : null;
   const schedule = plan.payment_schedule || 'maturity';
   const scheduleLabel = schedule === 'monthly' ? 'Monthly payments' : 'Paid at maturity';
-  const totalReturn = duration > 0 ? calculateExpectedReturn(100, rate, duration, plan.return_calc_method ?? 'simple') : 0;
+  const totalReturn = duration > 0 ? calculateExpectedReturn(100, rate) : 0;
 
   return (
     <div className="plan-card">
@@ -1161,7 +1156,7 @@ function PlanCard({ plan, onNavigate, onInvest, cashBalance, currency }) {
       </div>
       {plan.description && <p className="plan-desc">{plan.description}</p>}
       <div className="plan-terms">
-        <div><span>Fixed return</span><strong>{fmtPct(rate)} <small>APY</small></strong></div>
+        <div><span>Fixed return</span><strong>{fmtPct(rate)} <small>total</small></strong></div>
         <div><span>Duration</span><strong>{duration ? `${duration} days` : '—'}</strong></div>
         <div><span>Min – Max</span><strong>{fmtMoney(minAmt)}{maxAmt ? ` – ${fmtMoney(maxAmt)}` : '+'}</strong></div>
       </div>
@@ -2911,7 +2906,7 @@ function AdminPlanManagement() {
 
             {editing === plan.id ? (
               <div className="plan-edit-form">
-                <label className="full">Fixed return rate (% APY)
+                <label className="full">Fixed total return rate (%)
                   <input type="number" step="0.1" value={form.fixed_return_rate}
                     onChange={e => setForm({ ...form, fixed_return_rate: e.target.value })} />
                 </label>
@@ -2961,7 +2956,7 @@ function AdminPlanManagement() {
               <>
                 {plan.description && <p className="plan-desc">{plan.description}</p>}
                 <div className="plan-terms">
-                  <div><span>Fixed return</span><strong>{fmtPct(Number(plan.fixed_return_rate ?? 0))} <small>APY</small></strong></div>
+                  <div><span>Fixed return</span><strong>{fmtPct(Number(plan.fixed_return_rate ?? 0))} <small>total</small></strong></div>
                   <div><span>Duration</span><strong>{plan.duration_days} days</strong></div>
                   <div><span>Min – Max</span><strong>{fmtMoney(Number(plan.min_amount))}{plan.max_amount ? ` – ${fmtMoney(Number(plan.max_amount))}` : '+'}</strong></div>
                 </div>
