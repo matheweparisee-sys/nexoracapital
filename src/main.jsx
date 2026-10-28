@@ -739,8 +739,8 @@ function InvestmentConfirmation({ open, result, onClose, onNavigate, currency })
     : (duration > 0 ? new Date(now.getTime() + duration * 86400000) : null);
   const schedule = plan?.payment_schedule === 'monthly' ? 'Monthly payments' : 'Paid at maturity';
   const expectedReturn = details?.expected_return
-    ? Number(details.expected_return)
-    : (rate > 0 && duration > 0 ? amt * (rate / 100) * (duration / 365) : 0);
+  ? Number(details.expected_return)
+  : (rate > 0 ? amt * (rate / 100) : 0); * (duration / 365) : 0);
 
   return (
     <Modal open={open} onClose={onClose} title="Investment confirmed" eyebrow="Success">
