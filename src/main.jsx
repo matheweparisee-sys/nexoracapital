@@ -741,7 +741,6 @@ function InvestmentConfirmation({ open, result, onClose, onNavigate, currency })
   const expectedReturn = details?.expected_return
   ? Number(details.expected_return)
   : (rate > 0 ? amt * (rate / 100) : 0);
-  : (rate > 0 ? amt * (rate / 100) * (duration / 365) : 0);
   return (
     <Modal open={open} onClose={onClose} title="Investment confirmed" eyebrow="Success">
       <div className="confirm-body">
