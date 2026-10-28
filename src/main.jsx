@@ -72,6 +72,21 @@ function fmtPct(value) {
   return `${n.toFixed(2)}%`;
 }
 
+// Keep browser estimates consistent with the server-side investment formula.
+// Rates are annual percentages; duration is in days. This returns profit only,
+// not principal, and mirrors admin_activate_investment in the SQL migration.
+function calculateExpectedReturn(principal, annualRatePercent, durationDays, method = 'simple') {
+  const amount = Number(principal);
+  const rate = Number(annualRatePercent);
+  const days = Number(durationDays);
+  if (![amount, rate, days].every(Number.isFinite) || amount <= 0 || rate < 0 || days <= 0) return 0;
+  const annualRate = rate / 100;
+  const profit = method === 'compound'
+    ? amount * (Math.pow(1 + annualRate, days / 365) - 1)
+    : amount * annualRate * (days / 365);
+  return Math.round((profit + Number.EPSILON) * 100) / 100;
+}
+
 // Map a risk level to a tone class for styling.
 const riskTone = { conservative: 'mint', moderate: 'blue', aggressive: 'orange' };
 
@@ -676,7 +691,7 @@ function TxModal({ open, mode, onClose, cashBalance, currency, plans, onDone, on
             <span>Duration: <strong>{selectedPlan.duration_days} days</strong></span>
             <span>Payments: <strong>{selectedPlan.payment_schedule === 'monthly' ? 'Monthly' : 'At maturity'}</strong></span>
             {amount && parseFloat(amount) > 0 && (
-              <span>Est. return: <strong className="green-text">{fmtMoney(parseFloat(amount) * (Number(selectedPlan.fixed_return_rate ?? 0) / 100) * (selectedPlan.duration_days / 365), currency)}</strong></span>
+              <span>Est. return: <strong className="green-text">{fmtMoney(calculateExpectedReturn(parseFloat(amount), selectedPlan.fixed_return_rate ?? selectedPlan.target_return ?? 0, selectedPlan.duration_days, selectedPlan.return_calc_method ?? 'simple'), currency)}</strong></span>
             )}
             <span>Available: <strong>{fmtMoney(cashBalance, currency)}</strong></span>
           </div>
@@ -738,9 +753,9 @@ function InvestmentConfirmation({ open, result, onClose, onNavigate, currency })
     ? new Date(details.maturity_date)
     : (duration > 0 ? new Date(now.getTime() + duration * 86400000) : null);
   const schedule = plan?.payment_schedule === 'monthly' ? 'Monthly payments' : 'Paid at maturity';
-  const expectedReturn = details?.expected_return
-  ? Number(details.expected_return)
-  : (rate > 0 ? amt * (rate / 100) : 0);
+  const expectedReturn = details?.expected_return != null
+    ? Number(details.expected_return)
+    : calculateExpectedReturn(amt, rate, duration, plan?.return_calc_method ?? 'simple');
   return (
     <Modal open={open} onClose={onClose} title="Investment confirmed" eyebrow="Success">
       <div className="confirm-body">
@@ -1133,7 +1148,7 @@ function PlanCard({ plan, onNavigate, onInvest, cashBalance, currency }) {
   const maxAmt = plan.max_amount ? Number(plan.max_amount) : null;
   const schedule = plan.payment_schedule || 'maturity';
   const scheduleLabel = schedule === 'monthly' ? 'Monthly payments' : 'Paid at maturity';
-  const totalReturn = rate > 0 && duration > 0 ? (rate / 100) * (duration / 365) : 0;
+  const totalReturn = duration > 0 ? calculateExpectedReturn(100, rate, duration, plan.return_calc_method ?? 'simple') : 0;
 
   return (
     <div className="plan-card">
@@ -1152,7 +1167,7 @@ function PlanCard({ plan, onNavigate, onInvest, cashBalance, currency }) {
       </div>
       <div className="plan-terms">
         <div><span>Payments</span><strong>{scheduleLabel}</strong></div>
-        <div><span>Est. return</span><strong className="green-text">{fmtPct(totalReturn * 100)}</strong></div>
+        <div><span>Est. return</span><strong className="green-text">{fmtPct(totalReturn)}</strong></div>
         <div><span>Maturity</span><strong>Principal returned</strong></div>
       </div>
       {onInvest && (
