@@ -272,41 +272,21 @@ function usePortfolioData(enabled) {
     setLoading(true);
     setError('');
     try {
-      const [pRes, hRes, initialInvRes, initialTxRes] = await Promise.all([
+      const [pRes, hRes, invRes, txRes] = await Promise.all([
         supabase.from('portfolios').select('id,user_id,name,currency,cash_balance,created_at,updated_at').maybeSingle(),
         supabase.from('holdings').select('id,portfolio_id,asset_symbol,asset_name,quantity,average_cost,created_at,updated_at').order('asset_symbol', { ascending: true }),
-        supabase.from('investments').select('id,portfolio_id,plan_id,amount,status,outcome_value,expected_return,maturity_date,returns_credited,started_at,completed_at,created_at,updated_at,reference').order('created_at', { ascending: false }),
+        supabase.from('investments').select('id,portfolio_id,plan_id,amount,status,outcome_value,expected_return,maturity_date,returns_credited,started_at,completed_at,created_at,updated_at').order('created_at', { ascending: false }),
         supabase.from('transactions').select('id,portfolio_id,type,amount,status,reference,description,processed_at,created_at,updated_at').order('created_at', { ascending: false }).limit(8),
       ]);
-
-      // Older deployments may not yet have every optional display column. Retry
-      // with the core schema so one missing column cannot hide all saved records.
-      let invRes = initialInvRes;
-      if (invRes.error) {
-        invRes = await supabase.from('investments')
-          .select('id,portfolio_id,plan_id,amount,status,outcome_value,expected_return,maturity_date,returns_credited,started_at,completed_at,created_at,updated_at')
-          .order('created_at', { ascending: false });
-      }
-      if (invRes.error) {
-        invRes = await supabase.from('investments')
-          .select('id,portfolio_id,plan_id,amount,status,outcome_value,started_at,completed_at,created_at,updated_at')
-          .order('created_at', { ascending: false });
-      }
-      let txRes = initialTxRes;
-      if (txRes.error) {
-        txRes = await supabase.from('transactions')
-          .select('id,portfolio_id,type,amount,status,description,processed_at,created_at,updated_at')
-          .order('created_at', { ascending: false }).limit(8);
-      }
-
-      setPortfolio(pRes.error ? null : pRes.data);
-      setHoldings(hRes.error ? [] : (hRes.data ?? []));
-      setInvestments(invRes.error ? [] : (invRes.data ?? []));
-      setTransactions(txRes.error ? [] : (txRes.data ?? []));
-      const allFailed = [pRes, hRes, invRes, txRes].every(r => r.error);
-      if (allFailed) setError('We could not load your portfolio records. Please check your connection and try again.');
+      const errs = [pRes, hRes, invRes, txRes].filter(r => r.error);
+      if (errs.length) throw errs[0].error;
+      setPortfolio(pRes.data);
+      setHoldings(hRes.data ?? []);
+      setInvestments(invRes.data ?? []);
+      setTransactions(txRes.data ?? []);
     } catch (e) {
-      setError('We could not load your portfolio records. Please try again.');
+      setPortfolio(null); setHoldings([]); setInvestments([]); setTransactions([]);
+      setError('We could not load your portfolio. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -320,25 +300,6 @@ function usePortfolioData(enabled) {
 }
 
 // ─── Investment plans hook ───────────────────────────────────────────────────
-// Older active investment records may predate creation of the FUND holding.
-// Show their principal as an investment-fund position in the UI only when no
-// FUND holding exists, avoiding duplicate counting and preserving DB records.
-function addInvestmentFundFallback(holdings, investments) {
-  if (holdings.some(h => String(h.asset_symbol).toUpperCase() === 'FUND')) return holdings;
-  const activePrincipal = investments
-    .filter(inv => String(inv.status).toLowerCase() === 'active')
-    .reduce((sum, inv) => sum + Math.max(0, Number(inv.amount) || 0), 0);
-  if (activePrincipal <= 0) return holdings;
-  return [...holdings, {
-    id: 'active-investment-fund-fallback',
-    asset_symbol: 'FUND',
-    asset_name: 'Investment Fund',
-    quantity: activePrincipal,
-    average_cost: 1,
-    isInvestmentFallback: true,
-  }];
-}
-
 function useInvestmentPlans(enabled) {
   const [plans, setPlans]     = useState([]);
   const [loading, setLoading] = useState(false);
@@ -583,21 +544,17 @@ function TxModal({ open, mode, onClose, cashBalance, currency, plans, onDone, on
       setSuccess(isDeposit
         ? 'Deposit request submitted. We will verify your Bitcoin payment and update the status.'
         : isInvest
-        ? 'Investment activated successfully. You can track its progress in your portfolio.'
+        ? 'Investment submitted. It will appear in your portfolio once approved and activated by an administrator.'
         : 'Request submitted. You can track its status in your portfolio.');
       setTimeout(() => { onDone(); onClose(); }, 1600);
     } catch (err) {
       const msg = err && err.message ? err.message : '';
       if (msg.includes('receipt') || msg.includes('upload')) {
         setErrors([msg]);
-      } else if (msg.toLowerCase().includes('insufficient balance')) {
+      } else if (msg.includes('Insufficient balance')) {
         setErrors(['Insufficient available balance for this investment. Deposit funds first, then try again.']);
-      } else if (msg.toLowerCase().includes('kyc verification')) {
-        setErrors(['Please complete identity verification before investing.']);
-      } else if (msg.toLowerCase().includes('plan')) {
-        setErrors([msg]);
       } else {
-        setErrors([msg || 'We could not submit your request. Please check your details and try again.']);
+        setErrors(['We could not submit your request. Please check your details and try again.']);
       }
     } finally {
       setLoading(false);
@@ -799,7 +756,7 @@ function InvestmentConfirmation({ open, result, onClose, onNavigate, currency })
       <div className="confirm-body">
         <div className="confirm-check"><Check size={28} /></div>
         <p className="confirm-intro">
-          Your investment has been activated and added to your portfolio. You can track its progress and return history from the investment record.
+          Your investment has been recorded successfully. It will appear in your portfolio once approved and activated by an administrator.
         </p>
 
         {loading ? (
@@ -810,7 +767,7 @@ function InvestmentConfirmation({ open, result, onClose, onNavigate, currency })
             <div className="confirm-row"><span>Amount invested</span><strong>{fmtMoney(amt, currency)}</strong></div>
             <div className="confirm-row"><span>Date</span><strong>{fmtDate(details?.created_at || now.toISOString())}</strong></div>
             {details?.reference && <div className="confirm-row"><span>Reference</span><strong className="mono">{details.reference}</strong></div>}
-            <div className="confirm-row"><span>Status</span><StatusBadge status={details?.status || 'active'} /></div>
+            <div className="confirm-row"><span>Status</span><StatusBadge status={details?.status || 'pending'} /></div>
             {duration > 0 && <div className="confirm-row"><span>Duration</span><strong>{duration} days</strong></div>}
             {maturityDate && <div className="confirm-row"><span>Expected maturity</span><strong>{fmtDate(maturityDate.toISOString())}</strong></div>}
             <div className="confirm-row"><span>Payment schedule</span><strong>{schedule}</strong></div>
@@ -1029,55 +986,74 @@ function Chart({ small = false }) {
   );
 }
 
-// ─── App showcase: smartphone mockup with branded green app icon ─────────────
+// ─── Homepage: premium portfolio snapshot ────────────────────────────────────
 function AppShowcase({ onNavigate }) {
+  const [range, setRange] = useState('1M');
+  const ranges = ['1W', '1M', '3M', '1Y'];
+  const rangeValues = {
+    '1W': { change: '+2.8%', points: '0,91 38,84 75,92 112,68 149,75 186,48 223,55 260,24 300,31 340,12' },
+    '1M': { change: '+8.4%', points: '0,95 38,84 75,89 112,63 149,73 186,43 223,51 260,27 300,33 340,10' },
+    '3M': { change: '+12.6%', points: '0,102 38,92 75,72 112,80 149,53 186,61 223,32 260,39 300,17 340,8' },
+    '1Y': { change: '+21.3%', points: '0,110 38,99 75,105 112,73 149,81 186,54 223,62 260,34 300,27 340,7' },
+  };
+  const active = rangeValues[range];
+  const points = active.points.split(' ').map(p => p.split(',').join(',')).join(' ');
   return (
-    <div className="app-showcase">
-      <div className="phone-mockup">
-        <div className="phone-notch"></div>
-        <div className="phone-screen">
-          <div className="phone-status-bar">
-            <span>9:41</span>
-            <span className="phone-status-icons">
-              <svg width="14" height="10" viewBox="0 0 14 10" fill="currentColor"><path d="M1 7h2v2H1zM4 5h2v4H4zM7 3h2v6H7zM10 1h2v8h-2z"/></svg>
-              <svg width="16" height="10" viewBox="0 0 16 10" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="1" y="2" width="11" height="6" rx="1.5"/><rect x="13" y="4" width="1.5" height="2" rx=".5" fill="currentColor"/><rect x="2.5" y="3.5" width="7" height="3" rx=".5" fill="currentColor"/></svg>
-            </span>
+    <div className="app-showcase portfolio-showcase">
+      <div className="showcase-orb showcase-orb-one" />
+      <div className="showcase-orb showcase-orb-two" />
+      <div className="portfolio-preview">
+        <div className="preview-window-top">
+          <div className="preview-brand-lockup">
+            <div className="preview-brand-mark"><Activity size={17} strokeWidth={2.5} /></div>
+            <div><strong>Nexora</strong><span>CAPITAL OVERVIEW</span></div>
           </div>
-          <div className="phone-app-content">
-            <div className="phone-app-icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 17l6-6 4 4 8-8"/>
-                <path d="M17 7h4v4"/>
-              </svg>
-            </div>
-            <h3 className="phone-app-title">Nexora Capital</h3>
-            <span className="phone-app-tag">Digital investing</span>
-            <div className="phone-welcome">
-              <span className="phone-welcome-eyebrow">Welcome back</span>
-              <p>Track your portfolio, explore live market prices, and manage your investments — all in one place.</p>
-            </div>
-            <div className="phone-mock-rows">
-              <div className="phone-mock-row">
-                <div className="phone-mock-icon" style={{ background: '#f7931a' }}>B</div>
-                <div className="phone-mock-bar"><span>Bitcoin</span><span>BTC</span></div>
-                <div className="phone-mock-val">$—</div>
-              </div>
-              <div className="phone-mock-row">
-                <div className="phone-mock-icon" style={{ background: '#627eea' }}>E</div>
-                <div className="phone-mock-bar"><span>Ethereum</span><span>ETH</span></div>
-                <div className="phone-mock-val">$—</div>
-              </div>
-              <div className="phone-mock-row">
-                <div className="phone-mock-icon" style={{ background: '#00a878' }}>S</div>
-                <div className="phone-mock-bar"><span>Solana</span><span>SOL</span></div>
-                <div className="phone-mock-val">$—</div>
-              </div>
-            </div>
-            <button className="phone-cta-btn" onClick={() => onNavigate('signup')}>Get Started</button>
-          </div>
+          <div className="preview-live-label"><i /> MARKET LIVE</div>
         </div>
-        <div className="phone-glow"></div>
+        <div className="portfolio-preview-main">
+          <div className="portfolio-preview-heading">
+            <div><span className="preview-overline">TOTAL PORTFOLIO VALUE</span><div className="preview-total-value">$24,680<span>.50</span></div></div>
+            <div className="preview-growth-pill"><ArrowUpRight size={14} /> {active.change}</div>
+          </div>
+          <div className="preview-range-row">
+            <span>Portfolio performance</span>
+            <div className="preview-range-switch" aria-label="Chart time range">
+              {ranges.map(item => <button type="button" key={item} className={range === item ? 'selected' : ''} onClick={() => setRange(item)}>{item}</button>)}
+            </div>
+          </div>
+          <div className="preview-chart-wrap">
+            <div className="preview-chart-ylabels"><span>$25k</span><span>$23k</span><span>$21k</span></div>
+            <svg className="preview-performance-chart" viewBox="0 0 340 124" preserveAspectRatio="none" role="img" aria-label={`Illustrative portfolio trend for ${range}`}>
+              <defs><linearGradient id="portfolioPreviewFill" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stopColor="#40d6a0" stopOpacity=".27"/><stop offset="100%" stopColor="#40d6a0" stopOpacity="0"/></linearGradient></defs>
+              <path d={`M ${active.points.replace(/ /g, ' L ')} L 340 124 L 0 124 Z`} fill="url(#portfolioPreviewFill)" />
+              <polyline points={points} fill="none" stroke="#39c997" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+              <circle cx="340" cy={active.points.split(' ').slice(-1)[0].split(',')[1]} r="4.5" fill="#b7f34a" stroke="#12372e" strokeWidth="2" />
+            </svg>
+          </div>
+          <div className="preview-stats-row">
+            <div><span>Invested</span><strong>$18,200.00</strong></div>
+            <div><span>Projected return</span><strong className="preview-accent">+$2,340.00</strong></div>
+            <div><span>Active plans</span><strong>03 <small>plans</small></strong></div>
+          </div>
+          <div className="preview-lower-grid">
+            <div className="preview-allocation-card">
+              <div className="preview-mini-heading"><strong>Portfolio mix</strong><span>Overview</span></div>
+              <div className="preview-allocation-content">
+                <div className="preview-allocation-ring"><div><strong>100%</strong><span>allocated</span></div></div>
+                <div className="preview-allocation-legend"><span><i className="allocation-dot dot-investments" />Investment plans <b>58%</b></span><span><i className="allocation-dot dot-bitcoin" />Bitcoin <b>27%</b></span><span><i className="allocation-dot dot-ethereum" />Ethereum <b>15%</b></span></div>
+              </div>
+            </div>
+            <div className="preview-activity-card">
+              <div className="preview-mini-heading"><strong>Recent activity</strong><span>View all <ArrowUpRight size={11} /></span></div>
+              <div className="preview-activity-item"><div className="preview-activity-icon"><Wallet size={14} /></div><div><strong>Investment started</strong><span>Growth plan · Today</span></div><b>Active</b></div>
+              <div className="preview-activity-item"><div className="preview-activity-icon market-icon"><Activity size={14} /></div><div><strong>Market update</strong><span>Portfolio overview</span></div><b className="preview-accent">Live</b></div>
+            </div>
+          </div>
+          <div className="preview-demo-note"><ShieldCheck size={13} /> Interactive product preview · sample figures</div>
+        </div>
       </div>
+      <div className="showcase-floating-card showcase-floating-top"><div className="floating-icon"><PieChart size={17} /></div><div><span>Portfolio at a glance</span><strong>One clear picture</strong></div></div>
+      <div className="showcase-floating-card showcase-floating-bottom"><div className="floating-progress-ring"><span>72%</span></div><div><span>Investment journey</span><strong>Progress, made clear</strong></div></div>
     </div>
   );
 }
@@ -1218,167 +1194,34 @@ function PlanCard({ plan, onNavigate, onInvest, cashBalance, currency }) {
   );
 }
 
-// Circular timeline + live countdown for an investment's recorded term.
-function InvestmentProgressRing({ investment, size = 94 }) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (investment.status !== 'active') return undefined;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [investment.status, investment.id]);
-
-  const start = investment.started_at ? new Date(investment.started_at).getTime() : null;
-  const end = investment.maturity_date ? new Date(investment.maturity_date).getTime() : null;
-  const hasTimeline = Number.isFinite(start) && Number.isFinite(end) && end > start;
-  const progress = investment.status === 'completed' ? 100 :
-    (investment.status === 'active' && hasTimeline ? Math.max(0, Math.min(100, ((now - start) / (end - start)) * 100)) : 0);
-  const remaining = hasTimeline ? Math.max(0, end - now) : 0;
-  const days = Math.floor(remaining / 86400000);
-  const hours = Math.floor((remaining % 86400000) / 3600000);
-  const minutes = Math.floor((remaining % 3600000) / 60000);
-  const seconds = Math.floor((remaining % 60000) / 1000);
-  const radius = 38;
-  const circumference = 2 * Math.PI * radius;
-  const label = investment.status === 'completed' ? 'COMPLETE' :
-    investment.status === 'active' && hasTimeline ? `${Math.round(progress)}%` :
-    investment.status === 'pending' || investment.status === 'approved' ? 'PENDING' :
-    String(investment.status || 'RECORD').toUpperCase();
-
-  return (
-    <div className="investment-progress" style={{ width: size, minWidth: size, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-      <svg width={size} height={size} viewBox="0 0 100 100" role="img" aria-label={`${label} time progress`}>
-        <defs>
-          <linearGradient id={`investment-ring-${investment.id}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#4adeb5" />
-            <stop offset="100%" stopColor="#a3e635" />
-          </linearGradient>
-        </defs>
-        <circle cx="50" cy="50" r={radius} fill="none" stroke="var(--border, #263542)" strokeWidth="8" />
-        <circle cx="50" cy="50" r={radius} fill="none" stroke={`url(#investment-ring-${investment.id})`} strokeWidth="8" strokeLinecap="round" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - progress / 100)} transform="rotate(-90 50 50)" style={{ transition: 'stroke-dashoffset 0.6s ease' }} />
-        <text x="50" y="48" textAnchor="middle" fill="currentColor" fontSize={label.length > 6 ? '10' : '17'} fontWeight="700">{label}</text>
-        <text x="50" y="62" textAnchor="middle" fill="var(--muted, #8b98a5)" fontSize="7.5" letterSpacing="1">{investment.status === 'active' ? 'ELAPSED' : 'STATUS'}</text>
-      </svg>
-      {investment.status === 'active' && hasTimeline ? (
-        <span style={{ fontSize: 10, fontWeight: 600, color: remaining > 0 ? 'var(--muted)' : '#10b981', textAlign: 'center', whiteSpace: 'nowrap' }}>
-          {remaining > 0 ? `${days}d ${String(hours).padStart(2, '0')}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s` : 'Maturity reached'}
-        </span>
-      ) : (
-        <span style={{ fontSize: 10, color: 'var(--muted)', textAlign: 'center' }}>{investment.status === 'completed' ? 'Term ended' : 'Timeline pending'}</span>
-      )}
-    </div>
-  );
-}
-
-// Premium, tappable investment record. All displayed progress is derived from
-// the stored start and maturity timestamps; projected profit is not credited profit.
-function InvestmentRow({ inv, planName, currency, onClick }) {
+// Investment record row — shows plan name, principal, returns credited, total
+// value, maturity date, and status.
+function InvestmentRow({ inv, planName, currency }) {
   const principal = Number(inv.amount ?? 0);
   const returnsCredited = Number(inv.returns_credited ?? 0);
-  const expectedProfit = Number(inv.expected_return ?? 0);
+  const expectedReturn = Number(inv.expected_return ?? 0);
+  const totalValue = principal + returnsCredited;
   const cur = currency || 'USD';
-  const status = String(inv.status || 'pending').toLowerCase();
 
   return (
-    <button
-      type="button"
-      className="inv-row inv-row-button"
-      onClick={() => onClick?.(inv)}
-      aria-label={`View ${planName || 'investment'} details`}
-      style={{ width: '100%', textAlign: 'left', color: 'inherit', font: 'inherit', background: 'transparent', border: 0, cursor: 'pointer', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 16, padding: '20px 4px', borderBottom: '1px solid var(--border)', borderRadius: 0 }}
-    >
-      <InvestmentProgressRing investment={inv} size={88} />
-      <div className="inv-main" style={{ minWidth: 0, gap: 5 }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-          <strong style={{ fontSize: 15 }}>{planName || 'Investment plan'}</strong>
-          <StatusBadge status={status} />
-        </div>
-        <span>Invested {fmtDate(inv.started_at || inv.created_at)}{inv.maturity_date ? ` · Matures ${fmtDate(inv.maturity_date)}` : ''}</span>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px 14px', marginTop: 3, fontSize: 12 }}>
-          <span><span style={{ color: 'var(--muted)' }}>Principal </span><strong>{fmtMoney(principal, cur)}</strong></span>
-          <span><span style={{ color: 'var(--muted)' }}>Projected profit </span><strong style={{ color: '#10b981' }}>{fmtMoney(expectedProfit, cur)}</strong></span>
-          <span><span style={{ color: 'var(--muted)' }}>Credited </span><strong>{fmtMoney(returnsCredited, cur)}</strong></span>
-        </div>
-        {inv.reference && <span style={{ fontSize: 10, fontFamily: 'monospace' }}>ID: {inv.reference}</span>}
-        <span style={{ marginTop: 2, fontSize: 11, color: 'var(--muted)' }}>Open full record ↗</span>
+    <div className="inv-row">
+      <div className="inv-main">
+        <strong>{planName || 'Investment plan'}</strong>
+        <span>Started {fmtDate(inv.started_at || inv.created_at)}{inv.maturity_date ? ` · Matures ${fmtDate(inv.maturity_date)}` : ''}</span>
       </div>
-      <div style={{ marginLeft: 'auto', alignSelf: 'flex-start', paddingTop: 5, color: 'var(--muted)' }} aria-hidden="true">›</div>
-    </button>
-  );
-}
-
-function InvestmentDetailModal({ investment, planName, currency, onClose }) {
-  const [credits, setCredits] = useState([]);
-  const [loadingCredits, setLoadingCredits] = useState(false);
-  const [creditsError, setCreditsError] = useState('');
-
-  useEffect(() => {
-    if (!investment?.id) { setCredits([]); return undefined; }
-    let cancelled = false;
-    setLoadingCredits(true);
-    setCreditsError('');
-    (async () => {
-      try {
-        const { data, error } = await supabase
-          .from('return_credits')
-          .select('id,amount,credit_type,period_number,credit_date,created_at')
-          .eq('investment_id', investment.id)
-          .order('credit_date', { ascending: true });
-        if (error) throw error;
-        if (!cancelled) setCredits(data || []);
-      } catch {
-        if (!cancelled) { setCredits([]); setCreditsError('Return history is not available yet.'); }
-      } finally {
-        if (!cancelled) setLoadingCredits(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [investment?.id]);
-
-  if (!investment) return null;
-  const principal = Number(investment.amount || 0);
-  const expected = Number(investment.expected_return || 0);
-  const credited = Number(investment.returns_credited || 0);
-  const start = investment.started_at ? new Date(investment.started_at).getTime() : null;
-  const end = investment.maturity_date ? new Date(investment.maturity_date).getTime() : null;
-  const validTimeline = Number.isFinite(start) && Number.isFinite(end) && end > start;
-  const progress = investment.status === 'completed' ? 100 :
-    (investment.status === 'active' && validTimeline ? Math.max(0, Math.min(100, ((Date.now() - start) / (end - start)) * 100)) : 0);
-  return (
-    <Modal open={!!investment} onClose={onClose} title="Investment record" eyebrow="Portfolio details">
-      <div className="confirm-body">
-        <div className="confirm-details">
-          <div className="confirm-row"><span>Investment plan</span><strong>{planName || 'Investment plan'}</strong></div>
-          {investment.reference && <div className="confirm-row"><span>Transaction ID</span><strong className="mono">{investment.reference}</strong></div>}
-          <div className="confirm-row"><span>Principal invested</span><strong>{fmtMoney(principal, currency)}</strong></div>
-          <div className="confirm-row"><span>Status</span><StatusBadge status={investment.status} /></div>
-          <div className="confirm-row"><span>Created</span><strong>{fmtDate(investment.created_at)}</strong></div>
-          <div className="confirm-row"><span>Started</span><strong>{fmtDate(investment.started_at)}</strong></div>
-          <div className="confirm-row"><span>Maturity date</span><strong>{fmtDate(investment.maturity_date)}</strong></div>
-          <div className="confirm-row"><span>Projected profit (not yet credited)</span><strong className="green-text">{fmtMoney(expected, currency)}</strong></div>
-          <div className="confirm-row"><span>Returns credited</span><strong>{fmtMoney(credited, currency)}</strong></div>
-          <div className="confirm-row"><span>Principal + credited returns</span><strong>{fmtMoney(principal + credited, currency)}</strong></div>
-        </div>
-        {investment.status === 'active' && validTimeline && (
-          <div style={{ margin: '8px 0 18px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 7, fontSize: 12 }}><strong>Investment progress</strong><strong>{progress.toFixed(1)}%</strong></div>
-            <div style={{ height: 10, background: 'var(--border)', borderRadius: 99, overflow: 'hidden' }}><div style={{ height: '100%', width: `${progress}%`, background: 'linear-gradient(90deg, #10b981, #b7f56a)', transition: 'width 0.5s ease' }} /></div>
-          </div>
+      <div className="inv-amount">
+        <strong>{fmtMoney(principal, cur)}</strong>
+        {returnsCredited > 0 ? (
+          <span className="muted">Returns {fmtMoney(returnsCredited, cur)}</span>
+        ) : expectedReturn > 0 ? (
+          <span className="muted">Expected {fmtMoney(expectedReturn, cur)}</span>
+        ) : null}
+        {returnsCredited > 0 && (
+          <span className="muted">Total {fmtMoney(totalValue, cur)}</span>
         )}
-        <h3 style={{ margin: '8px 0 10px' }}>Return history</h3>
-        {loadingCredits ? <LoadingState label="Loading return history…" /> : creditsError ? <p className="muted">{creditsError}</p> : credits.length === 0 ? <p className="muted">No returns have been credited to this investment yet.</p> : (
-          <div className="activity">
-            {credits.map(credit => (
-              <div className="activity-row" key={credit.id}>
-                <div className="activity-icon"><Activity size={16} /></div>
-                <div><strong>{credit.credit_type === 'principal' ? 'Principal returned' : 'Return credited'}</strong><span>{fmtDate(credit.credit_date || credit.created_at)} · Period {credit.period_number}</span></div>
-                <div className="activity-right"><strong>{fmtMoney(credit.amount, currency)}</strong></div>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="confirm-actions"><Button onClick={onClose}>Close record</Button></div>
       </div>
-    </Modal>
+      <StatusBadge status={inv.status} />
+    </div>
   );
 }
 
@@ -1410,7 +1253,7 @@ const testimonials = [
   { name: 'Elena Vasquez', role: 'New to digital assets', initials: 'EV', rating: 5, text: 'As someone just starting out, the platform is approachable and easy to understand. The fixed-return plans gave me confidence to begin.' },
   { name: 'David Okafor', role: 'Active trader', initials: 'DO', rating: 5, text: 'Real-time prices across twelve coins, clean charts, and instant withdrawals. Nexora nailed the details that matter to serious investors.' },
   { name: 'Priya Sharma', role: 'Portfolio builder', initials: 'PS', rating: 5, text: 'I love how everything lives in one place — deposits, investments, and live market data. The interface is calm and focused.' },
-  { name: 'James Thompson', role: 'Retirement planner', initials: 'JT', rating: 5, text: 'The plan terms are easy to compare, and I can review my investment records in one place.' },
+  { name: 'James Thompson', role: 'Retirement planner', initials: 'JT', rating: 5, text: 'The guaranteed fixed-return investment plans fit perfectly into my long-term strategy. Transparent terms, no surprises.' },
 ];
 
 function StarRating({ count }) {
@@ -1632,7 +1475,6 @@ function InvestmentsPage({ onNavigate }) {
   const [txModal, setTxModal] = useState(null);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [confirmResult, setConfirmResult] = useState(null);
-  const [selectedInvestment, setSelectedInvestment] = useState(null);
 
   function openInvest(plan) {
     setSelectedPlan(plan);
@@ -1650,7 +1492,7 @@ function InvestmentsPage({ onNavigate }) {
     <>
       <TopNav active="investments" onNavigate={onNavigate} />
       <main className="page-pad inner-page">
-        <PageHeader eyebrow="Explore investments" title="Choose with context." text="Compare investment plan terms and projected returns, then track active investments in one place." />
+        <PageHeader eyebrow="Explore investments" title="Choose with context." text="Browse available investment plans with guaranteed fixed returns and review your active investments." />
 
         <section className="plans-section">
           <div className="section-heading">
@@ -1706,7 +1548,7 @@ function InvestmentsPage({ onNavigate }) {
               ) : data.investments.length === 0 ? (
                 <EmptyState icon={Inbox} title="No investments yet" text="Your investment records will appear here once you start one." />
               ) : (
-                data.investments.map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} onClick={setSelectedInvestment} />)
+                data.investments.map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} />)
               )}
             </div>
           </section>
@@ -1736,15 +1578,12 @@ function InvestmentsPage({ onNavigate }) {
             currency={currency}
           />
         )}
-        {signedIn && selectedInvestment && (
-          <InvestmentDetailModal investment={selectedInvestment} planName={planNameById[selectedInvestment.plan_id]} currency={currency} onClose={() => setSelectedInvestment(null)} />
-        )}
 
         <div className="disclaimer">
           <ShieldCheck size={20} />
           <div>
-            <strong>Investment tracking</strong>
-            <p>Progress is calculated from the recorded start and maturity dates. Projected profit is an estimate from the selected plan; it is not shown as credited funds until a return credit is recorded. Check the transaction ID and return history in each investment record.</p>
+            <strong>Guaranteed fixed returns</strong>
+            <p>Returns are calculated from the plan's stored rate and duration, credited by the platform after admin verification. Terms are set by Nexora Capital and cannot be changed by customers.</p>
           </div>
         </div>
       </main>
@@ -1765,17 +1604,13 @@ function PortfolioContent({ onNavigate }) {
   const { plans } = useInvestmentPlans(true);
   const data = usePortfolioData(true);
   const { portfolio, holdings, investments, transactions, loading, error, reload } = data;
-  const [selectedInvestment, setSelectedInvestment] = useState(null);
   const currency = portfolio?.currency || 'USD';
 
   const planNameById = {};
   plans.forEach(p => { planNameById[p.id] = p.name; });
 
-  // Active investment records created before the FUND holding existed remain
-  // visible as a derived position, without writing or duplicating database rows.
-  const holdingsForDisplay = addInvestmentFundFallback(holdings, investments);
   // Allocations by holding quantity * average_cost (cost basis, not market value).
-  const holdingsWithBasis = holdingsForDisplay.map(h => ({
+  const holdingsWithBasis = holdings.map(h => ({
     ...h,
     costBasis: Number(h.quantity) * Number(h.average_cost),
   }));
@@ -1813,9 +1648,9 @@ function PortfolioContent({ onNavigate }) {
           </div>
 
           <h2 className="subheading">Your assets</h2>
-          {holdingsForDisplay.length === 0 ? (
+          {holdings.length === 0 ? (
             <div className="card">
-              <EmptyState icon={Wallet} title="No asset holdings yet" text="Asset holdings are listed separately from investment records. Your investment progress and history appear in the Investments section below." action={<Button variant="outline" onClick={() => onNavigate('investments')}>Explore investments <ArrowUpRight size={16} /></Button>} />
+              <EmptyState icon={Wallet} title="No holdings yet" text="Assets you hold will appear here once your portfolio is active." action={<Button variant="outline" onClick={() => onNavigate('investments')}>Explore investments <ArrowUpRight size={16} /></Button>} />
             </div>
           ) : (
             <div className="holding-list">
@@ -1841,7 +1676,7 @@ function PortfolioContent({ onNavigate }) {
             {investments.length === 0 ? (
               <EmptyState icon={Inbox} title="No investments yet" text="Your investment records will appear here once you start one." action={<Button variant="outline" onClick={() => onNavigate('investments')}>View plans <ArrowUpRight size={16} /></Button>} />
             ) : (
-              investments.map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} onClick={setSelectedInvestment} />)
+              investments.map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} />)
             )}
           </div>
 
@@ -1869,9 +1704,6 @@ function PortfolioContent({ onNavigate }) {
               </div>
             )}
           </div>
-          {selectedInvestment && (
-            <InvestmentDetailModal investment={selectedInvestment} planName={planNameById[selectedInvestment.plan_id]} currency={currency} onClose={() => setSelectedInvestment(null)} />
-          )}
         </>
         )}
       </main>
@@ -1905,7 +1737,6 @@ function DashboardContent({ onNavigate }) {
   const currency = portfolio?.currency || 'USD';
   const [txModal, setTxModal] = useState(null);
   const [confirmResult, setConfirmResult] = useState(null);
-  const [selectedInvestment, setSelectedInvestment] = useState(null);
 
   function openTx(mode) { setTxModal(mode); }
   function closeTx() { setTxModal(null); }
@@ -1913,8 +1744,7 @@ function DashboardContent({ onNavigate }) {
   const planNameById = {};
   plans.forEach(p => { planNameById[p.id] = p.name; });
 
-  const holdingsForDisplay = addInvestmentFundFallback(holdings, investments);
-  const holdingsWithBasis = holdingsForDisplay.map(h => ({
+  const holdingsWithBasis = holdings.map(h => ({
     ...h,
     costBasis: Number(h.quantity) * Number(h.average_cost),
   }));
@@ -2014,8 +1844,8 @@ function DashboardContent({ onNavigate }) {
             </div>
             <div className="card">
               <div className="card-title"><h3>Holdings</h3><button className="text-link" onClick={() => onNavigate('portfolio')}>View portfolio</button></div>
-              {holdingsForDisplay.length === 0 ? (
-                <EmptyState icon={Wallet} title="No asset holdings yet" text="Asset holdings are separate from your investment records. Your active investments appear in the Investments section." />
+              {holdings.length === 0 ? (
+                <EmptyState icon={Wallet} title="No holdings yet" text="Assets you hold will appear here." />
               ) : (
                 holdingsWithBasis.slice(0, 6).map(h => {
                   const tone = symbolTone[h.asset_symbol] || 'mint';
@@ -2040,7 +1870,7 @@ function DashboardContent({ onNavigate }) {
             {investments.length === 0 ? (
               <EmptyState icon={Inbox} title="No investments yet" text="Start an investment from the plans page." action={<Button variant="outline" onClick={() => onNavigate('investments')}>View plans <ArrowUpRight size={16} /></Button>} />
             ) : (
-              investments.slice(0, 5).map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} onClick={setSelectedInvestment} />)
+              investments.slice(0, 5).map(inv => <InvestmentRow key={inv.id} inv={inv} planName={planNameById[inv.plan_id]} currency={currency} />)
             )}
           </div>
         </>
@@ -2064,9 +1894,6 @@ function DashboardContent({ onNavigate }) {
         onNavigate={onNavigate}
         currency={currency}
       />
-      {selectedInvestment && (
-        <InvestmentDetailModal investment={selectedInvestment} planName={planNameById[selectedInvestment.plan_id]} currency={currency} onClose={() => setSelectedInvestment(null)} />
-      )}
     </>
   );
 }
